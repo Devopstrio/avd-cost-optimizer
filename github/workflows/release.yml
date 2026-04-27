@@ -1,0 +1,69 @@
+name: 'AVD FinOps Platform CD'
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'apps/**'
+      - 'backend/**'
+      - '.github/workflows/deploy.yml'
+
+jobs:
+  validate-and-test:
+    name: 'SAST & Unit Testing'
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install Dependencies
+      run: pip install pytest fastapi httpx
+
+    - name: Run Pytest
+      run: pytest tests/
+
+  build-and-push:
+    name: 'Build FinOps Containers'
+    needs: validate-and-test
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Docker Login (Azure ACR)
+      run: echo "${{ secrets.ACR_PASSWORD }}" | docker login acrfinops.azurecr.io -u "${{ secrets.ACR_USERNAME }}" --password-stdin
+
+    - name: Build Cost API
+      run: |
+        docker build -t acrfinops.azurecr.io/devopstrio/cost-api:${{ github.sha }} ./backend
+        docker push acrfinops.azurecr.io/devopstrio/cost-api:${{ github.sha }}
+
+  infra-deploy:
+    name: 'Terraform Apply'
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout Source
+      uses: actions/checkout@v3
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v2
+
+    - name: Terraform Init
+      run: terraform init
+      working-directory: ./terraform
+
+    - name: Terraform Apply
+      run: terraform apply -auto-approve
+      working-directory: ./terraform
+      env:
+        ARM_CLIENT_ID: ${{ secrets.AZ_CLIENT_ID }}
+        ARM_CLIENT_SECRET: ${{ secrets.AZ_CLIENT_SECRET }}
+        ARM_SUBSCRIPTION_ID: ${{ secrets.AZ_SUBSCRIPTION_ID }}
+        ARM_TENANT_ID: ${{ secrets.AZ_TENANT_ID }}
